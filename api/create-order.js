@@ -1,16 +1,19 @@
 // PolarSeal Draft Order API — Vercel Serverless Function
-// File: /api/create-order.js
-// Deploy to Vercel. Set env vars in Vercel dashboard:
-//   SHOPIFY_STORE = polarsealpackaging.myshopify.com
-//   SHOPIFY_TOKEN = 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
-//   NOTIFY_EMAIL  = ablawrenceenterprises@gmail.com
+// File: api/create-order.js
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
+  // CORS — allow requests from any origin
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
 
   try {
     const {
@@ -29,14 +32,14 @@ export default async function handler(req, res) {
       notes
     } = req.body;
 
-    const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
-    const SHOPIFY_TOKEN = process.env.SHOPIFY_TOKEN;
+    const SHOPIFY_STORE = process.env.SHOPIFY_STORE || 'polarsealpackaging.myshopify.com';
+    const SHOPIFY_TOKEN = process.env.SHOPIFY_TOKEN || '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';
 
-    const skuLines = skus.map((s, i) =>
+    const skuLines = (skus || []).map((s, i) =>
       `SKU ${i+1}: ${s.name} | Flavor: ${s.flavor} | Qty: ${s.quantity} bags | Net Weight: ${s.weight}`
     ).join('\n');
 
-    const orderNotes = `POLARSEAL ORDER — ${packageType.toUpperCase()}
+    const orderNotes = `POLARSEAL ORDER — ${packageType}
 Brand: ${brandName}
 Contact: ${customerName} | ${customerEmail}${customerPhone ? ' | ' + customerPhone : ''}
 
@@ -46,12 +49,13 @@ Size: ${bagSize} | Finish: ${finish} | Hanghole: ${hanghole ? 'Yes' : 'No'} | Wi
 SKU DETAILS
 ${skuLines}
 
-PRICING SUMMARY
+PRICING
 Full Order Total: $${Number(totalPrice).toFixed(2)} USD
 50% Deposit (paid now): $${Number(depositAmount).toFixed(2)} USD
 Remaining Balance: $${(Number(totalPrice) - Number(depositAmount)).toFixed(2)} USD
-Balance due: After production is complete, before your bags ship.
-${notes ? '\nNOTES: ' + notes : ''}`.trim();
+Balance due after production, before bags ship.
+
+${notes ? 'NOTES: ' + notes : ''}`.trim();
 
     const properties = [
       { name: 'Package', value: packageType },
@@ -60,19 +64,23 @@ ${notes ? '\nNOTES: ' + notes : ''}`.trim();
       { name: 'Hanghole', value: hanghole ? 'Yes' : 'No' },
       { name: 'Window', value: hasWindow ? 'Yes' : 'No' },
       { name: 'Full Order Total', value: `$${Number(totalPrice).toFixed(2)} USD` },
-      { name: 'Deposit (50%)', value: `$${Number(depositAmount).toFixed(2)} USD` },
+      { name: 'Deposit 50%', value: `$${Number(depositAmount).toFixed(2)} USD` },
       { name: 'Remaining Balance', value: `$${(Number(totalPrice) - Number(depositAmount)).toFixed(2)} USD` },
       { name: 'Balance Due', value: 'After production, before shipping' },
     ];
 
-    skus.forEach((s, i) => {
+    (skus || []).forEach((s, i) => {
       properties.push({ name: `SKU ${i+1} Name`, value: s.name });
       properties.push({ name: `SKU ${i+1} Flavor`, value: s.flavor });
-      properties.push({ name: `SKU ${i+1} Net Weight`, value: s.weight });
+      properties.push({ name: `SKU ${i+1} Weight`, value: s.weight });
       properties.push({ name: `SKU ${i+1} Quantity`, value: `${s.quantity} bags` });
     });
 
-    const draftOrderPayload = {
+    const nameParts = (customerName || '').split(' ');
+    const firstName = nameParts[0] || '';
+    const lastName = nameParts.slice(1).join(' ') || '';
+
+    const payload = {
       draft_order: {
         line_items: [{
           title: `${packageType} — 50% Deposit`,
@@ -82,8 +90,8 @@ ${notes ? '\nNOTES: ' + notes : ''}`.trim();
           properties,
         }],
         customer: {
-          first_name: customerName.split(' ')[0] || customerName,
-          last_name: customerName.split(' ').slice(1).join(' ') || '',
+          first_name: firstName,
+          last_name: lastName,
           email: customerEmail,
           ...(customerPhone && { phone: customerPhone }),
         },
@@ -97,7 +105,7 @@ ${notes ? '\nNOTES: ' + notes : ''}`.trim();
         ],
         send_receipt: true,
         send_payment_receipt: true,
-        tags: `polarseal,${packageType.toLowerCase().replace(/\s+/g,'-')},deposit,new-order`,
+        tags: `polarseal,${(packageType || '').toLowerCase().replace(/\s+/g, '-')},deposit`,
       }
     };
 
@@ -109,12 +117,14 @@ ${notes ? '\nNOTES: ' + notes : ''}`.trim();
           'Content-Type': 'application/json',
           'X-Shopify-Access-Token': SHOPIFY_TOKEN,
         },
-        body: JSON.stringify(draftOrderPayload),
+        body: JSON.stringify(payload),
       }
     );
 
     const shopifyData = await shopifyRes.json();
+
     if (!shopifyRes.ok) {
+      console.error('Shopify error:', JSON.stringify(shopifyData));
       return res.status(500).json({ error: 'Shopify API error', details: shopifyData });
     }
 
@@ -130,6 +140,7 @@ ${notes ? '\nNOTES: ' + notes : ''}`.trim();
     });
 
   } catch (err) {
+    console.error('Server error:', err);
     return res.status(500).json({ error: 'Server error', message: err.message });
   }
-}
+};
